@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#171827">
+<title>랜덤 작곡실</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/15.1.22/Tone.js"></script>
+<style>
+:root{color-scheme:dark;--bg:#171827;--panel:#22243a;--panel2:#2b2e48;--text:#f4f3ff;--muted:#b8bad0;--accent:#9887ff;--line:#41435f}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif}
+main{width:min(900px,100%);margin:auto;padding:22px 16px 40px}h1{font-size:clamp(1.55rem,5vw,2.2rem);margin:0 0 5px}.sub{color:var(--muted);margin:0 0 20px;font-size:.95rem}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;margin:14px 0}
+.controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}label{display:block;color:var(--muted);font-size:.9rem;margin-bottom:6px}
+select,input{width:100%;min-height:44px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:8px 10px;font-size:16px}
+input[type=range]{padding:0;accent-color:var(--accent)}.value{font-weight:700;color:var(--text)}
+.buttons{display:flex;flex-wrap:wrap;gap:10px;margin-top:15px}button{min-height:46px;border:0;border-radius:11px;padding:10px 17px;font-size:16px;font-weight:700;cursor:pointer}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid #c5bcff;outline-offset:2px}.primary{background:var(--accent);color:#17152b}.secondary{background:#41435f;color:white}
+button:disabled{opacity:.5;cursor:not-allowed}.status{color:var(--muted);font-size:.92rem;margin:12px 0 0;min-height:1.4em}
+.info{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.pill{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:6px 10px;font-size:.85rem;color:var(--muted)}
+h2{font-size:1.05rem;margin:0 0 12px}#staffScroll{overflow-x:auto;background:#f7f5ed;border-radius:10px;padding:8px;-webkit-overflow-scrolling:touch}
+#staffScore svg{display:block;height:150px;max-width:none}
+.staff-note{font-size:.82rem;color:var(--muted);margin:0 0 12px;line-height:1.5}
+.note{color:var(--muted);font-size:.88rem;line-height:1.6}
+@media(min-width:650px){.controls{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:380px){main{padding:18px 11px 30px}.panel{padding:13px}}
+</style>
+</head>
+<body>
+<main>
+<h1>🎼 랜덤 작곡실</h1>
+<p class="sub">리듬과 멜로디를 무작위로 조합해 나만의 음악을 만들어 보세요.</p>
+<section class="panel" aria-label="작곡 설정">
+<div class="controls">
+<div><label for="bars">곡 길이</label><select id="bars"><option value="8">8마디</option><option value="16" selected>16마디</option></select></div>
+<div><label for="tempo">템포 <span class="value" id="tempoValue">130</span> BPM</label><input id="tempo" type="range" min="70" max="180" value="130"></div>
+<div><label for="sound">멜로디 음색</label><select id="sound"><option value="triangle" selected>부드러운 전자음</option><option value="sine">맑은 전자음</option><option value="square">8비트 게임음</option><option value="sawtooth">밝은 신스</option></select></div>
+</div>
+<div class="buttons">
+<button class="primary" id="generate" type="button">🎲 새 음악 만들기</button>
+<button class="secondary" id="play" type="button">▶ 재생</button>
+<button class="secondary" id="stop" type="button" disabled>■ 정지</button>
+</div>
+<p class="status" id="status" role="status" aria-live="polite">새 음악을 만들 준비가 됐어요.</p>
+<div class="info"><span class="pill">다장조</span><span class="pill">4/4박자</span><span class="pill">도4~도5</span><span class="pill">최대 4도 도약</span></div>
+</section>
+<section class="panel"><h2>오선보 악보</h2><p class="staff-note">높은음자리표 · 다장조 · 모든 마디가 하나의 오선보로 이어집니다. 화면 아래쪽을 좌우로 밀어 전체 악보를 볼 수 있어요.</p><div id="staffScroll"><div id="staffScore" aria-label="생성된 오선보"></div></div></section>
+<p class="note">리듬은 한 마디마다 2박짜리 패턴 2개를 무작위로 선택합니다. 멜로디는 다장조 음계에서 이전 음과 최대 4도 차이 나는 음을 골라 만듭니다. 음표 길이: 1=8분음표, 2=4분음표, 3=점4분음표, 4=2분음표. 재생하려면 인터넷 연결이 필요합니다(Tone.js 로드).</p>
+</main>
+<script>
+(() => {
+"use strict";
+const patterns={1:[2,2],2:[3,1],3:[1,3],4:[2,1,1],5:[1,1,2],6:[1,2,1],7:[1,1,1,1],8:[4]};
+const scale=["C4","D4","E4","F4","G4","A4","B4","C5"];
+const noteNames=["도4","레4","미4","파4","솔4","라4","시4","도5"];
+const $=id=>document.getElementById(id);
+let song=[],synth=null,playing=false,finishTimer=null;
+function stopSong(){
+ if(typeof Tone!=="undefined"){Tone.Transport.stop();Tone.Transport.cancel();if(synth)synth.releaseAll();}
+ if(finishTimer){clearTimeout(finishTimer);finishTimer=null;}
+ playing=false;$("play").disabled=false;$("stop").disabled=true;
+}
+function generateSong(){
+ stopSong();let previous=null;song=[];
+ for(let b=0;b<Number($("bars").value);b++){
+  const p1=1+Math.floor(Math.random()*8),p2=1+Math.floor(Math.random()*8);
+  const durations=[...patterns[p1],...patterns[p2]];
+  const notes=durations.map(duration=>{
+   const options=scale.map((_,i)=>i).filter(i=>previous===null||Math.abs(i-previous)<=3);
+   const index=options[Math.floor(Math.random()*options.length)];
+   previous=index;return{index,note:scale[index],name:noteNames[index],duration};
+  });
+  song.push({p1,p2,notes});
+ }
+ renderStaff();$("status").textContent=`${song.length}마디 음악을 만들었어요. 재생 버튼을 눌러 들어보세요.`;
+}
+function renderStaff(){
+ const root=$("staffScore");root.replaceChildren();
+ if(!song.length)return;
+ // 모든 마디를 하나의 SVG 오선보에 연속해서 배치합니다.
+ const left=58,barWidth=142,width=left+song.length*barWidth+12,height=150;
+ const yForIndex=[100,95,90,85,80,75,70,65];
+ let svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${song.length}마디가 이어진 오선보">`;
+ svg+=`<rect width="100%" height="100%" fill="#f7f5ed"/>`;
+ // 오선 다섯 줄은 악보 전체를 가로질러 이어집니다.
+ for(let j=0;j<5;j++){const y=50+j*10;svg+=`<line x1="8" y1="${y}" x2="${width-8}" y2="${y}" stroke="#333" stroke-width="1.2"/>`;}
+ svg+=`<text x="10" y="88" font-size="43" font-family="serif" fill="#222">𝄞</text>`;
+ song.forEach((bar,i)=>{
+  const x0=left+i*barWidth;
+  if(i>0)svg+=`<line x1="${x0}" y1="50" x2="${x0}" y2="90" stroke="#333" stroke-width="1.2"/>`;
+  svg+=`<text x="${x0+5}" y="25" font-size="11" font-family="sans-serif" fill="#555">${i+1}</text>`;
+  const total=bar.notes.reduce((sum,n)=>sum+n.duration,0);
+  let elapsed=0;
+  bar.notes.forEach(n=>{
+   const x=x0+10+(elapsed+n.duration/2)/total*(barWidth-20),y=yForIndex[n.index];
+   elapsed+=n.duration;
+   if(n.index===0)svg+=`<line x1="${x-10}" y1="100" x2="${x+10}" y2="100" stroke="#222" stroke-width="1.4"/>`;
+   const hollow=n.duration===4;
+   svg+=`<ellipse cx="${x}" cy="${y}" rx="6.2" ry="4.2" transform="rotate(-20 ${x} ${y})" fill="${hollow?'#f7f5ed':'#222'}" stroke="#222" stroke-width="1.4"/>`;
+   if(n.duration!==4){
+    const stemX=x+5.5,stemTop=y-27;
+    svg+=`<line x1="${stemX}" y1="${y}" x2="${stemX}" y2="${stemTop}" stroke="#222" stroke-width="1.4"/>`;
+    if(n.duration===1)svg+=`<path d="M ${stemX} ${stemTop} q 13 6 4 15" fill="none" stroke="#222" stroke-width="1.8"/>`;
+   }else{
+    svg+=`<line x1="${x+5.5}" y1="${y}" x2="${x+5.5}" y2="${y-27}" stroke="#222" stroke-width="1.4"/>`;
+   }
+   if(n.duration===3)svg+=`<circle cx="${x+12}" cy="${y-1}" r="1.8" fill="#222"/>`;
+  });
+ });
+ svg+=`<line x1="${width-8}" y1="50" x2="${width-8}" y2="90" stroke="#333" stroke-width="1.2"/></svg>`;
+ root.innerHTML=svg;
+}
+async function playSong(){
+ if(!song.length||playing)return;
+ $("play").disabled=true;$("status").textContent="오디오를 준비하고 있어요...";
+ try{
+  if(typeof Tone==="undefined")throw new Error("Tone.js를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.");
+  await Tone.start();
+  if(synth)synth.dispose();
+  synth=new Tone.PolySynth(Tone.Synth,{oscillator:{type:$("sound").value},envelope:{attack:.015,decay:.12,sustain:.45,release:.12}}).toDestination();
+  synth.volume.value=-7;
+  Tone.Transport.stop();Tone.Transport.cancel();Tone.Transport.bpm.value=Number($("tempo").value);
+  const eighthSeconds=30/Number($("tempo").value);let at=0;
+  song.forEach(bar=>bar.notes.forEach(n=>{
+   const duration=n.duration*eighthSeconds,note=n.note;
+   Tone.Transport.schedule(time=>{if(synth)synth.triggerAttackRelease(note,Math.max(.06,duration*.9),time);},at);
+   at+=duration;
+  }));
+  playing=true;$("play").disabled=true;$("stop").disabled=false;$("status").textContent="재생 중...";
+  Tone.Transport.start("+0.05");
+  finishTimer=setTimeout(()=>{playing=false;$("play").disabled=false;$("stop").disabled=true;$("status").textContent="재생이 끝났어요.";finishTimer=null;},at*1000+350);
+ }catch(err){stopSong();$("status").textContent=err&&err.message?err.message:"재생 중 오류가 발생했어요.";}
+}
+$("generate").addEventListener("click",generateSong);
+$("play").addEventListener("click",playSong);
+$("stop").addEventListener("click",()=>{stopSong();$("status").textContent="재생을 정지했어요.";});
+$("tempo").addEventListener("input",()=>$("tempoValue").textContent=$("tempo").value);
+generateSong();
+})();
+</script>
+</body>
+</html>
